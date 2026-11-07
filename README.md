@@ -12,6 +12,30 @@ bunx better-symphony
 bun install -g better-symphony
 ```
 
+## Updating
+
+Stop the running Symphony process first. Agents that are still running when you stop it are interrupted.
+
+```bash
+# bunx: force a fresh download instead of the cached copy
+bunx better-symphony@latest
+
+# Global install from npm
+bun install -g better-symphony@latest
+
+# Global install from a GitHub repo or fork (main, or a branch/tag after #)
+bun install -g github:<owner>/better-symphony#main
+
+# Git checkout
+cd /path/to/better-symphony
+git pull
+bun install
+```
+
+Then start Symphony again from your project directory. Run `better-symphony --version` to check the installed version (a git-based install shows the version in `package.json`, which isn't bumped until a release).
+
+Your `workflows/` folder lives in your own project, so updating Symphony never touches it.
+
 ## Quick Start
 
 > **Important:** Symphony is run from **your project's directory**. Your project should have a `workflows/` folder containing your workflow `.md` files. Symphony auto-detects `workflows/*.md` in the current working directory.
@@ -389,6 +413,41 @@ You are working on **{{ issue.identifier }}**: {{ issue.title }}
 ```
 
 This expands into two virtual workflows: `dev:default` and `dev:alt`, each with its own API key, project, and repo. Use `${profile.*}` to reference profile values anywhere in the frontmatter or prompt template.
+
+#### Shared profiles file
+
+When several workflows target the same set of projects, put the profiles in one YAML file and point each workflow at it. Adding a project then only means editing that one file.
+
+```yaml
+# workflows/projects.yaml
+profiles:
+    default:
+        api_key: $LINEAR_API_KEY
+        project_slug: better-symphony-04de8977cc95
+        repo: SabatinoMasala/better-symphony
+    alt:
+        api_key: $LINEAR_API_KEY_ALT
+        project_slug: better-symphony-alt-69ac729a1b50
+        repo: SabatinoMasala/other-repo
+```
+
+```yaml
+# workflows/dev.md
+---
+profiles: ./projects.yaml   # path relative to this workflow file (~ is expanded)
+
+tracker:
+    kind: linear
+    api_key: ${profile.api_key}
+    project_slug: ${profile.project_slug}
+    # ...
+---
+```
+
+- If `matrix` is omitted, the workflow expands into **every** profile in the file. Add `matrix: [default]` to run only a subset.
+- The top-level `profiles:` key in the shared file is optional; a bare map of profile names works too.
+- Use a `.yaml` extension (not `.md`) so the file isn't picked up as a workflow.
+- Workflows are expanded at startup, so restart Symphony after adding a new profile.
 
 Use `--routes` to verify the expansion:
 

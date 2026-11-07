@@ -5,8 +5,15 @@
 
 import { readFileSync } from "fs";
 import { parse as parseYaml } from "yaml";
-import { basename } from "path";
-import type { WorkflowConfig, WorkflowDefinition, AgentConfig, ExpandedWorkflow } from "./types.js";
+import { basename, dirname, resolve } from "path";
+import { homedir } from "os";
+import type {
+  WorkflowConfig,
+  WorkflowDefinition,
+  AgentConfig,
+  ExpandedWorkflow,
+  ProfileConfig,
+} from "./types.js";
 import { WorkflowError } from "./types.js";
 
 // ── Interpolation ──────────────────────────────────────────────
@@ -69,6 +76,73 @@ function extractFrontmatter(content: string): { raw: string; body: string } | nu
   };
 }
 
+// ── Profile Resolution ─────────────────────────────────────────
+
+/**
+ * Resolve the profiles for a workflow.
+ *
+ * `profiles` may be:
+ *  - an inline map of profile name → values (original behavior), or
+ *  - a string path to a shared YAML file, relative to the workflow file
+ *    (`~` is expanded). The file may contain the profile map directly or
+ *    wrap it in a top-level `profiles:` key.
+ *
+ * Returns `fromFile: true` when profiles were loaded from a shared file.
+ */
+export function resolveProfiles(
+  parsed: Record<string, unknown>,
+  workflowPath: string
+): { profiles: Record<string, ProfileConfig> | undefined; fromFile: boolean } {
+  const raw = parsed.profiles;
+
+  if (typeof raw !== "string") {
+    return {
+      profiles: raw && typeof raw === "object" ? (raw as Record<string, ProfileConfig>) : undefined,
+      fromFile: false,
+    };
+  }
+
+  const ref = raw.trim();
+  const expanded = ref === "~" || ref.startsWith("~/") ? homedir() + ref.slice(1) : ref;
+  const profilesPath = resolve(dirname(workflowPath), expanded);
+
+  let content: string;
+  try {
+    content = readFileSync(profilesPath, "utf-8");
+  } catch (err) {
+    throw new WorkflowError(
+      "workflow_parse_error",
+      `Workflow '${basename(workflowPath)}' references profiles file '${ref}' which could not be read (${profilesPath}): ${(err as Error).message}`
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = parseYaml(content);
+  } catch (err) {
+    throw new WorkflowError(
+      "workflow_parse_error",
+      `Failed to parse profiles file '${ref}': ${(err as Error).message}`
+    );
+  }
+
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const wrapped = (data as Record<string, unknown>).profiles;
+    if (wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)) {
+      data = wrapped;
+    }
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new WorkflowError(
+      "workflow_parse_error",
+      `Profiles file '${ref}' must contain a map of profile names to values`
+    );
+  }
+
+  return { profiles: data as Record<string, ProfileConfig>, fromFile: true };
+}
+
 // ── Expansion ──────────────────────────────────────────────────
 
 /**
@@ -99,8 +173,13 @@ export function expandWorkflowFile(filePath: string): ExpandedWorkflow[] {
     return [{ path: filePath, virtualName: name }];
   }
 
-  const matrix = parsed.matrix as string[] | undefined;
-  const profiles = parsed.profiles as Record<string, Record<string, unknown>> | undefined;
+  const { profiles, fromFile } = resolveProfiles(parsed, filePath);
+
+  // With a shared profiles file, omitting `matrix` runs every profile in it.
+  let matrix = parsed.matrix as string[] | undefined;
+  if (matrix === undefined && fromFile && profiles) {
+    matrix = Object.keys(profiles);
+  }
 
   if (!matrix || !Array.isArray(matrix)) {
     return [{ path: filePath, virtualName: name }];
@@ -162,7 +241,7 @@ export function loadProfileWorkflow(filePath: string, profileName: string): Work
     );
   }
 
-  const profiles = fullParsed?.profiles as Record<string, Record<string, unknown>> | undefined;
+  const { profiles } = resolveProfiles(fullParsed ?? {}, filePath);
   if (!profiles || !profiles[profileName]) {
     throw new WorkflowError(
       "workflow_parse_error",

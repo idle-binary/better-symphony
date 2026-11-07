@@ -61,7 +61,8 @@ export interface WorkflowDefinition {
 }
 
 export interface WorkflowConfig {
-  profiles?: Record<string, ProfileConfig>;
+  /** Inline profile map, or a path to a shared YAML profiles file (relative to the workflow file) */
+  profiles?: Record<string, ProfileConfig> | string;
   matrix?: string[];
   tracker?: TrackerConfig;
   polling?: PollingConfig;
